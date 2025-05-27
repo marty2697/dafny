@@ -120,6 +120,8 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
         WriteFormals(" ", ctor.Formals, wr);
         wr.WriteLine();
       }
+
+      wr.WriteLine("deriving Inhabited");
       return new NullClassWriter(this);
     }
     else
@@ -130,10 +132,11 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
       var ctor = dt.Ctors[0];
       var wrFunctions = wr;
       wr = wr.NewBlock(header: $"structure {structName} where", open: BlockStyle.Newline, close: BlockStyle.Newline);
-      wr = wr.WriteLine($"{ctor.Name} ::");
+      var wrindent = wr.WriteLine($"{ctor.Name} ::");
       foreach (var field in ctor.Formals) {
-        wr = wr.WriteLine($"{field.Name} : {TypeName(field.Type, wr, field.Origin)}");
+        wrindent = wrindent.WriteLine($"{field.Name} : {TypeName(field.Type, wrindent, field.Origin)}");
       }
+      wr.WriteLine("deriving Inhabited");
       return new StructureWriter(this, dt, wrFunctions);
     }
   }
@@ -275,7 +278,7 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
       SetType { Arg: var argType } => $"List ({TypeName(argType, wr, tok, member)})",
       UserDefinedType { Name: "nat" } => "Nat",
       UserDefinedType { Name: "_tuple#0" } => "Unit",
-      UserDefinedType { Name: "_tuple#2", TypeArgs: [var fst, var snd] } => $"({TypeName(fst, wr, tok, member)}, {TypeName(snd, wr, tok, member)})",
+      UserDefinedType { Name: "_tuple#2", TypeArgs: [var fst, var snd] } => $"{TypeName(fst, wr, tok, member)} × {TypeName(snd, wr, tok, member)}",
       UserDefinedType { Name: var name } => name,
       _ => throw new ArgumentOutOfRangeException(nameof(type))
     };
