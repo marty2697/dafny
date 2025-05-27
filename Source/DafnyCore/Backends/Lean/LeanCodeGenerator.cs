@@ -26,13 +26,16 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
       super.WriteFormals(" ", formals, functions);
       // TODO fix order of header and body
       var bodyWr = functions.NewBlock(header: $": {super.TypeName(resultType, functions, tok)} :=", open: BlockStyle.Newline, close: BlockStyle.Nothing);
-       bodyWr = bodyWr.NewBlock(header: "", "else this", open: BlockStyle.Space, close: BlockStyle.Newline);
-       var realBodyWr = bodyWr.NewBlock(header: "if", footer: "then", open: BlockStyle.Space, close: BlockStyle.Space);
-       foreach (var clause in ((Function)member).Req) {
-         super.EmitExpr(clause.E, false, realBodyWr, null);
-         realBodyWr = realBodyWr.Write("∧");
-         realBodyWr.WriteLine();
-       }
+      if (!((Function)member).Req.Any()) {
+        return bodyWr;
+      }
+      bodyWr = bodyWr.NewBlock(header: "", "else this", open: BlockStyle.Space, close: BlockStyle.Newline);
+      var realBodyWr = bodyWr.NewBlock(header: "if", footer: "then", open: BlockStyle.Space, close: BlockStyle.Space);
+      foreach (var clause in ((Function)member).Req) {
+        super.EmitExpr(clause.E, false, realBodyWr, null);
+        realBodyWr = realBodyWr.Write("∧");
+        realBodyWr.WriteLine();
+      }
       return  bodyWr;
     }
 
@@ -674,10 +677,15 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
       case BinaryExpr.ResolvedOpcode.YetUndetermined:
       case BinaryExpr.ResolvedOpcode.LessThanLimit:
       case BinaryExpr.ResolvedOpcode.Add:
+        opString = "+"; break;
       case BinaryExpr.ResolvedOpcode.Sub:
+        opString = "-"; break;
       case BinaryExpr.ResolvedOpcode.Mul:
+        opString = "*"; break;
       case BinaryExpr.ResolvedOpcode.Div:
+        opString = "/"; break;
       case BinaryExpr.ResolvedOpcode.Mod:
+        opString = "%"; break;
       case BinaryExpr.ResolvedOpcode.LeftShift:
       case BinaryExpr.ResolvedOpcode.RightShift:
       default:

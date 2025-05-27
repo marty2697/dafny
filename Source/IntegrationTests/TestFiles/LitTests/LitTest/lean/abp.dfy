@@ -5,6 +5,39 @@
 
 // LIBRARY
 
+datatype tData = New(value: nat, bit: bool)
+
+datatype tAck = New(bit: bool)
+
+datatype tSenderInit = New(receiver: ReceiverID, messages: seq<nat>, bit: bool)
+
+datatype tReceiverInit = New(sender: SenderID, bit: bool)
+
+datatype tSenderState = New(messages: seq<nat>, current: nat, bit: bool)
+
+datatype tReceiverState = New(messages: seq<nat>, bit: bool)
+
+datatype Event = Null(Null: ()) | halt(Null: ()) | eData(TData: tData) | eAck(TAck: tAck) | eTick(Null: ()) | eSenderInit(TSenderInit: tSenderInit) | eReceiverInit(TReceiverInit: tReceiverInit) | eSenderState(TSenderState: tSenderState) | eReceiverState(TReceiverState: tReceiverState)
+
+datatype MachineID = Ticker(ticker: TickerID) | Sender(sender: SenderID) | Receiver(receiver: ReceiverID)
+
+datatype Machine = Ticker(ticker: Ticker) | Sender(sender: Sender) | Receiver(receiver: Receiver)
+
+datatype Message = New(target: MachineID, event: Event)
+
+datatype Handler = Return(state: Machine) | Send(message: Message, state: Machine) | Broadcast(messages: seq<Message>, state: Machine)
+
+type TickerID = nat
+
+datatype TickerState = Dummy
+
+datatype Ticker = New(state: TickerState)
+
+type SenderID = nat
+
+datatype SenderState = Init | Sending
+
+
 datatype Link = Link(src: MachineID, dst: MachineID)
 
 datatype Channel = Channel(msgs: seq<Event>) {
@@ -63,37 +96,6 @@ datatype Network = Network(channel: map<Link, Channel>) {
   }
 }
 
-datatype tData = New(value: nat, bit: bool)
-
-datatype tAck = New(bit: bool)
-
-datatype tSenderInit = New(receiver: ReceiverID, messages: seq<nat>, bit: bool)
-
-datatype tReceiverInit = New(sender: SenderID, bit: bool)
-
-datatype tSenderState = New(messages: seq<nat>, current: nat, bit: bool)
-
-datatype tReceiverState = New(messages: seq<nat>, bit: bool)
-
-datatype Event = Null(Null: ()) | halt(Null: ()) | eData(TData: tData) | eAck(TAck: tAck) | eTick(Null: ()) | eSenderInit(TSenderInit: tSenderInit) | eReceiverInit(TReceiverInit: tReceiverInit) | eSenderState(TSenderState: tSenderState) | eReceiverState(TReceiverState: tReceiverState)
-
-datatype MachineID = Ticker(ticker: TickerID) | Sender(sender: SenderID) | Receiver(receiver: ReceiverID)
-
-datatype Machine = Ticker(ticker: Ticker) | Sender(sender: Sender) | Receiver(receiver: Receiver)
-
-datatype Message = New(target: MachineID, event: Event)
-
-datatype Handler = Return(state: Machine) | Send(message: Message, state: Machine) | Broadcast(messages: seq<Message>, state: Machine)
-
-type TickerID = nat
-
-datatype TickerState = Dummy
-
-datatype Ticker = New(state: TickerState)
-
-type SenderID = nat
-
-datatype SenderState = Init | Sending
 
 datatype Sender = New(receiver: ReceiverID, messages: seq<nat>, current: nat, bit: bool, state: SenderState) {
   function Init_on_eSenderInit(init: tSenderInit): Handler
