@@ -525,7 +525,7 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
     // TODO mcamaioni@
     switch (op) {
       case ResolvedUnaryOp.BoolNot:
-        wr.Write("not "); // todo
+        wr.Write("!"); 
         EmitExpr(expr, inLetExprBody, wr, wStmts);
         break;
       case ResolvedUnaryOp.Cardinality:
