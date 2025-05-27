@@ -22,12 +22,13 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
 
     public ConcreteSyntaxTree CreateFunction(string name, List<TypeArgumentInstantiation> typeArgs, List<Formal> formals, Type resultType, IOrigin tok, bool isStatic,
       bool createBody, MemberDecl member, bool forBodyInheritance, bool lookasideBody) {
-      functions = functions.Write($"def {dt.GetCompileName(parent.Options)}.{name}");
+      functions.WriteLine();
+      functions = functions.Write($"def {dt.Name}.{name}");
       Contract.Assert(typeArgs.Count == 0);
       var dtType = UserDefinedType.FromTopLevelDecl(tok, dt, new List<Type>());
       parent.DeclareFormal(" ", "this", dtType, tok, true, functions);
       parent.WriteFormals(" ", formals, functions);
-      var bodyWr = functions.NewBlock(header: $": {parent.TypeName(resultType, functions, tok)} :=", open: BlockStyle.Newline, close: BlockStyle.Nothing);
+      var bodyWr = functions.NewBlock(header: $": {parent.TypeName(resultType, functions, tok)} :=", open: BlockStyle.Newline, close: BlockStyle.Newline);
       if (!((Function)member).Req.Any()) {
         return bodyWr;
       }
@@ -113,9 +114,9 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
     {
       // Inductive
       Contract.Assert(dt.Members.Count == 0); // This is to make sure that the inductive datatype has no function members
-      wr.WriteLine($"inductive {dt.GetCompileName(Options)} where");
+      wr.WriteLine($"inductive {dt.Name} where");
       foreach (var ctor in dt.Ctors) {
-        wr.Write($"| {ctor.GetCompileName(options)}");
+        wr.Write($"| {ctor.Name}");
         WriteFormals(" ", ctor.Formals, wr);
         wr.WriteLine();
       }
@@ -124,26 +125,24 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
     else
     {
       // Structure
-      var structName = dt.GetCompileName(Options);
+      var structName = dt.Name;
       Contract.Assert(dt.Ctors.Count == 1);
       var ctor = dt.Ctors[0];
       var wrFunctions = wr;
       wr = wr.NewBlock(header: $"structure {structName} where", open: BlockStyle.Newline, close: BlockStyle.Newline);
-      wr = wr.WriteLine($"{ctor.GetCompileName(Options)} ::");
+      wr = wr.WriteLine($"{ctor.Name} ::");
       foreach (var field in ctor.Formals) {
-        wr = wr.WriteLine($"{field.GetOrCreateCompileName(currentIdGenerator)} : {TypeName(field.Type, wr, field.Origin)}");
+        wr = wr.WriteLine($"{field.Name} : {TypeName(field.Type, wr, field.Origin)}");
       }
       return new StructureWriter(this, dt, wrFunctions);
     }
   }
-  
-  protected override ConcreteSyntaxTree EmitReturnExpr(ConcreteSyntaxTree wr) {
-    // emits "<returnExpr>" for function bodies
-    var wrBody = wr.Fork();
-    wr.WriteLine();
-    return wrBody;
+
+  protected override void CompileReturnBody(Expression body, Type resultType, ConcreteSyntaxTree wr,
+    [CanBeNull] IVariable accumulatorVar) {
+    EmitExpr(body, false, wr, wr.Fork());
   }
-  
+
   public override void EmitExpr(Expression expr, bool inLetExprBody, ConcreteSyntaxTree wr, ConcreteSyntaxTree wStmts) {
     switch (expr) {
       case ForallExpr forallExpr: // Overriding the lambda hell from SinglePassCodeGenerator
@@ -182,6 +181,8 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
         wr = wr.Write(" else ");
         EmitExpr(iteExpr.Els, inLetExprBody, wr, wStmts);
         break;
+      case SeqUpdateExpr seqUpdateExpr:
+        
       default:
         base.EmitExpr(expr, inLetExprBody, wr, wStmts);
         break;
@@ -232,6 +233,11 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
           Expression (bv) => new IdentifierExpr(bv.Origin, bv)).ToList())), @case.Body, @case.Attributes)).ToList(),
       false), inLetExprBody, wr, wStmts);
   }
+  
+  protected override string IdName(IVariable v) {
+    Contract.Requires(v != null);
+    return v.Name;
+  }
 
   protected override IClassWriter DeclareNewtype(NewtypeDecl nt, ConcreteSyntaxTree wr) {
     throw new UnsupportedFeatureException(nt.StartToken, 0, "newtype");
@@ -269,6 +275,7 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
       SetType { Arg: var argType } => $"List ({TypeName(argType, wr, tok, member)})",
       UserDefinedType { Name: "nat" } => "Nat",
       UserDefinedType { Name: "_tuple#0" } => "Unit",
+      UserDefinedType { Name: "_tuple#2", TypeArgs: [var fst, var snd] } => $"({TypeName(fst, wr, tok, member)}, {TypeName(snd, wr, tok, member)})",
       UserDefinedType { Name: var name } => name,
       _ => throw new ArgumentOutOfRangeException(nameof(type))
     };
@@ -410,7 +417,7 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
         wr.Write($"\"{value}\"");
         break;
       case StaticReceiverExpr:
-        throw new ArgumentOutOfRangeException(nameof(e));
+        break;
       default:
         // NB: Integer/Decimal/Boolean literal
         wr.Write($"{e}");
@@ -453,7 +460,7 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
   }
 
   protected override void EmitDatatypeValue(DatatypeValue dtv, string typeDescriptorArguments, string arguments, ConcreteSyntaxTree wr) {
-    wr.Write($"{dtv.DatatypeName}.{dtv.Ctor.GetCompileName(Options)} {arguments}");
+    wr.Write($"{dtv.DatatypeName}.{dtv.Ctor.Name} {arguments}");
   }
 
   protected override void GetSpecialFieldInfo(SpecialField.ID id, object idParam, Type receiverType, out string compiledName, out string preString,
@@ -479,7 +486,7 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
 
   protected override ILvalue EmitMemberSelect(Action<ConcreteSyntaxTree> obj, Type objType, MemberDecl member, List<TypeArgumentInstantiation> typeArgs, Dictionary<TypeParameter, Type> typeMap,
     Type expectedType, string additionalCustomParameter = null, bool internalAccess = false) {
-    return SuffixLvalue(obj, $".{member.GetCompileName(Options)}");
+    return SuffixLvalue(obj, $".{member.Name}");
   }
 
   protected override ConcreteSyntaxTree EmitArraySelect(List<Action<ConcreteSyntaxTree>> indices, Type elmtType, ConcreteSyntaxTree wr) {
@@ -526,9 +533,24 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
 
   protected override void EmitApplyExpr(Type functionType, IOrigin tok, Expression function, List<Expression> arguments, bool inLetExprBody,
     ConcreteSyntaxTree wr, ConcreteSyntaxTree wStmts) {
-    EmitExpr(function, inLetExprBody, wr, wStmts);
+    var sep = " ";
+    if (function is IdentifierExpr { Name: var name } && name.StartsWith("_#Make")) {
+      wr = wr.ForkInParens();
+      sep = ", ";
+    } else {
+      EmitExpr(function, inLetExprBody, wr, wStmts);
+      wr.Write(" ");
+    }
+    TrExprList(arguments, wr, inLetExprBody, wStmts, sep: sep);
+  }
+  
+  protected override void CompileFunctionCallExpr(FunctionCallExpr e, ConcreteSyntaxTree wr, bool inLetExprBody,
+    ConcreteSyntaxTree wStmts, FCE_Arg_Translator tr, bool alreadyCoerced = false) {
+    EmitIdentifier($"{TypeName(e.Receiver.Type, wr, e.Origin)}.{e.Name}", wr);
     wr.Write(" ");
-    TrExprList(arguments, wr, inLetExprBody, wStmts, sep: " ");
+    tr(e.Receiver, wr, inLetExprBody, wStmts);
+    wr.Write(" ");
+    TrExprList(e.Args, wr, inLetExprBody, wStmts, sep: " ", parens: false);
   }
 
   protected override ConcreteSyntaxTree EmitBetaRedex(List<string> boundVars, List<Expression> arguments, List<Type> boundTypes, Type resultType, IOrigin resultTok,
@@ -539,7 +561,7 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
   protected override void EmitDestructor(Action<ConcreteSyntaxTree> source, Formal dtor, int formalNonGhostIndex, DatatypeCtor ctor, Func<List<Type>> getTypeArgs,
     Type bvType, ConcreteSyntaxTree wr) {
     source(wr);
-    wr.Write($".{dtor.CompileName}");
+    wr.Write($".{dtor.Name}");
   }
 
   protected override ConcreteSyntaxTree CreateLambda(List<Type> inTypes, IOrigin tok, List<string> inNames, Type resultType, ConcreteSyntaxTree wr,
@@ -550,7 +572,7 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
   protected override ConcreteSyntaxTree EmitQuantifierExpr(Action<ConcreteSyntaxTree> collection, bool isForall,
     Type collectionElementType, BoundVar bv, ConcreteSyntaxTree wr) {
     wr = wr.Write($"∀ ");
-    var @var = bv.GetOrCreateCompileName(currentIdGenerator);
+    var @var = bv.Name;
     EmitIdentifier(@var, wr);
     wr = wr.Write($", ");
     EmitIdentifier(@var, wr);
@@ -706,6 +728,7 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
       case BinaryExpr.ResolvedOpcode.Prefix:
         break;
       case BinaryExpr.ResolvedOpcode.Concat:
+        opString = "++";
         break;
       case BinaryExpr.ResolvedOpcode.InSeq:
         break;

@@ -3165,7 +3165,7 @@ namespace Microsoft.Dafny.Compilers {
       }
     }
 
-    void CompileReturnBody(Expression body, Type resultType, ConcreteSyntaxTree wr, [CanBeNull] IVariable accumulatorVar) {
+    protected virtual void CompileReturnBody(Expression body, Type resultType, ConcreteSyntaxTree wr, [CanBeNull] IVariable accumulatorVar) {
       Contract.Requires(body != null);
       Contract.Requires(resultType != null);
       Contract.Requires(wr != null);
