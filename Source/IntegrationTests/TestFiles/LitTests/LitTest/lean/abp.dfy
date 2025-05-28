@@ -4,6 +4,10 @@
 // generatedOutput
 
 // LIBRARY
+newtype TickerID = nat
+newtype SenderID = nat
+newtype ReceiverID = nat
+
 
 datatype tData = New(value: nat, bit: bool)
 
@@ -27,13 +31,10 @@ datatype Message = New(target: MachineID, event: Event)
 
 datatype Handler = Return(state: Machine) | Send(message: Message, state: Machine) | Broadcast(messages: seq<Message>, state: Machine)
 
-type TickerID = nat
 
 datatype TickerState = Dummy
 
 datatype Ticker = New(state: TickerState)
-
-type SenderID = nat
 
 datatype SenderState = Init | Sending
 
@@ -123,7 +124,6 @@ datatype Sender = New(receiver: ReceiverID, messages: seq<nat>, current: nat, bi
   }
 }
 
-type ReceiverID = nat
 
 datatype ReceiverState = Init | Receiving
 
