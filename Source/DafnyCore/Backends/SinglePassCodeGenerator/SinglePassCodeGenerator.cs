@@ -1615,7 +1615,7 @@ namespace Microsoft.Dafny.Compilers {
       enclosingModule = module;
       var wr = CreateModule(module, module.GetCompileName(Options), module.IsDefaultModule, externModule, libraryName, module.Attributes, programNode);
       var v = new CheckHasNoAssumesVisitor(this, wr);
-      foreach (TopLevelDecl d in module.TopLevelDecls) {
+      foreach (TopLevelDecl d in module.TopLevelDecls) { // TODO ask somayyas@ about OrderedBySCC
         if (!ProgramResolver.ShouldCompile(d)) {
           continue;
         }

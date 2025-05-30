@@ -10,6 +10,9 @@ using Type = Microsoft.Dafny.Type;
 
 namespace DafnyCore.Backends.Lean;
 
+// TODO: mcamaioni@: every time TrExprList is used in this file, surround each argument with parentheses
+// and every time you output what looks like a function call
+
 public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : SinglePassCodeGenerator(options, reporter) {
   private struct StructureWriter(LeanCodeGenerator parent, DatatypeDecl dt, ConcreteSyntaxTree functions) : IClassWriter {
     public ConcreteSyntaxTree CreateMethod(MethodOrConstructor m, List<TypeArgumentInstantiation> typeArgs, bool createBody, bool forBodyInheritance, bool lookasideBody) {
@@ -99,7 +102,8 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
   }
 
   protected override ConcreteSyntaxTree CreateModule(ModuleDefinition module, string moduleName, bool isDefault, ModuleDefinition externModule, string libraryName, Attributes moduleAttributes, ConcreteSyntaxTree wr) {
-    return wr.NewBlock($"namespace {moduleName}", $"end {moduleName}", BlockStyle.Newline, BlockStyle.Nothing);
+    // TODO write import header to wr
+    return wr.NewBlock($"namespace {moduleName}" , $"end {moduleName}", BlockStyle.Newline, BlockStyle.Nothing);
   }
 
   protected override string GetHelperModuleName() {
@@ -129,8 +133,17 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
         WriteFormals(" ", ctor.Formals, wr);
         wr.WriteLine();
       }
-
+      
       wr.WriteLine("deriving Inhabited, DecidableEq");
+
+      foreach (var ctor in dt.Ctors) {
+        if (ctor.Formals.Count == 1) {
+          wr.WriteLine($"def {dt.Name}.get{ctor.Name} : {dt.Name} -> {TypeName(ctor.Formals[0].Type, wr, ctor.Origin)} :=");
+          wr.WriteLine($"| .{ctor.Name} this => this");
+          wr.WriteLine($"| _ => default");
+        }
+      }
+      
       return new NullClassWriter(this);
     }
     else
@@ -167,13 +180,15 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
         break;
       case LetExpr letExpr: // Destructuring let
         var wrVars = wr.Write("let ");
-        if (letExpr.AllBoundVars.Count() > 1) {
+        if (letExpr.LHSs.Count > 1) {
           wrVars = wr.NewBlock(header: "⟨", footer: "⟩", open: BlockStyle.Nothing, close: BlockStyle.Space);
         }
-        TrExprList(letExpr.AllBoundVars.Select(Expression (bv) => new IdentifierExpr(bv.Origin, bv)).ToList(), wrVars, inLetExprBody, wStmts, parens: false);
+        TrExprList(letExpr.LHSs.Select(Expression (pat) => new IdentifierExpr(pat.Origin, new BoundVar(pat.Origin, pat.Id))).ToList(), wrVars, inLetExprBody, wStmts, parens: false);
         wr = wr.Write(":= ");
-        EmitExpr(letExpr.Body, inLetExprBody, wr, wStmts);
+        Contract.Assert(letExpr.RHSs.Count == 1);
+        EmitExpr(letExpr.RHSs.First(), inLetExprBody, wr, wStmts);
         wr.WriteLine();
+        EmitExpr(letExpr.Body, inLetExprBody, wr, wStmts);
         break;
       case DatatypeValue datatypeValue:
         EmitApplyExpr(null, datatypeValue.Origin, new IdentifierExpr(datatypeValue.Origin, new BoundVar(datatypeValue.Origin, $"{datatypeValue.DatatypeName}.{datatypeValue.Ctor.Name}")), datatypeValue.Arguments, inLetExprBody, wr, wStmts);
@@ -205,6 +220,14 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
         wr = wr.Write(" else ");
         EmitExpr(iteExpr.Els, inLetExprBody, wr, wStmts);
         break;
+      case MemberSelectExpr { Obj: { Type: var type } lhs, Member: DatatypeDestructor field }:
+        if (type.AsIndDatatype.Ctors.Count > 1) {
+          wr.Write($"{type.AsIndDatatype.Name}.get{field.Name.CapitaliseFirstLetter()} ");
+          EmitExpr(lhs, inLetExprBody, wr, wStmts);
+          break;
+        } else {
+          goto default;
+        }
       case MemberSelectExpr { Obj: var lhs, Member: SpecialField { SpecialId: SpecialField.ID.UseIdParam, IdParam: string rhs } }:
         if (rhs.StartsWith("is")) {
           EmitExpr(lhs, inLetExprBody, wr, wStmts);
@@ -216,7 +239,22 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
       case ParensExpression { E: var inner }:
         EmitExpr(inner, inLetExprBody, wr.ForkInParens(), wStmts);
         break;
-      case SeqUpdateExpr seqUpdateExpr:
+      case SetComprehension { BoundVars: [var element], Range: var predicate }:
+        wr = wr.NewBlock(open: BlockStyle.SpaceBrace, close: BlockStyle.SpaceBrace);
+        EmitIdentifier(element.Name, wr);
+        wr.Write(" | ");
+        EmitExpr(predicate, inLetExprBody, wr, wStmts);
+        break;
+      case MapComprehension { BoundVars: [var idx], TermLeft: var key, Range: var predicate, Term: var value }:
+        key ??= new IdentifierExpr(idx.Origin, idx);
+        wr.Write("λ ");
+        EmitExpr(key, inLetExprBody, wr, wStmts);
+        wr.Write(", ");
+        var wrPredicate = wr.NewBlock(header: "if", footer: " then part.some", open: BlockStyle.Space, close: BlockStyle.Space);
+        EmitExpr(predicate, inLetExprBody, wrPredicate, wStmts);
+        EmitExpr(value, inLetExprBody, wr, wStmts);
+        wr.Write(" else part.none");
+        break;
       default:
         base.EmitExpr(expr, inLetExprBody, wr, wStmts);
         break;
@@ -306,10 +344,10 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
       CharType => "Char",
       IntType => "Int",
       MapType { Domain: var domain, Range: var range } =>
-        $"{TypeName(domain, wr, tok, member)} -> {TypeName(range, wr, tok, member)}",
+        $"pfun ({TypeName(domain, wr, tok, member)}) ({TypeName(range, wr, tok, member)})",
       MultiSetType multiSetType => throw new NotImplementedException(),
       SeqType { Arg: var argType } => $"List ({TypeName(argType, wr, tok, member)})",
-      SetType { Arg: var argType } => $"List ({TypeName(argType, wr, tok, member)})",
+      SetType { Arg: var argType } => $"Set ({TypeName(argType, wr, tok, member)})",
       UserDefinedType { Name: "nat" } => "Nat",
       UserDefinedType { Name: "_tuple#0" } => "Unit",
       UserDefinedType { Name: "_tuple#2", TypeArgs: [var fst, var snd] } => $"{TypeName(fst, wr, tok, member)} × {TypeName(snd, wr, tok, member)}",
@@ -485,7 +523,8 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
   }
 
   protected override void EmitTupleSelect(string prefix, int i, ConcreteSyntaxTree wr) {
-    throw new NotImplementedException();
+    i = i + 1;
+    wr.Write($"{prefix}.{i}");
   }
 
   protected override string FullTypeName(UserDefinedType udt, MemberDecl member = null) {
@@ -502,12 +541,17 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
 
   protected override void GetSpecialFieldInfo(SpecialField.ID id, object idParam, Type receiverType, out string compiledName, out string preString,
     out string postString) {
+    // this is where tuple select happens
     preString = "";
     postString = "";
     switch(id) {
       case SpecialField.ID.UseIdParam:
         if (idParam is string field) {
-          compiledName = field;
+          if (field.StartsWith("dtor__")) {
+            compiledName = (int.Parse(field.Substring("dtor__".Length)) + 1).ToString();
+          } else {
+            compiledName = field;
+          }
         } else {
           throw new ArgumentOutOfRangeException(nameof(idParam), "Impossible. idParam will always be a string");
         }
@@ -515,7 +559,9 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
       case SpecialField.ID.Keys: // TODO
         compiledName = "dom";
         break;
-      case SpecialField.ID.Values:
+      case SpecialField.ID.Values: // TODO
+        compiledName = "range";
+        break;
       default:
         throw new ArgumentOutOfRangeException(nameof(id), id, null);
     }
@@ -523,7 +569,7 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
 
   protected override ILvalue EmitMemberSelect(Action<ConcreteSyntaxTree> obj, Type objType, MemberDecl member, List<TypeArgumentInstantiation> typeArgs, Dictionary<TypeParameter, Type> typeMap,
     Type expectedType, string additionalCustomParameter = null, bool internalAccess = false) {
-    return SuffixLvalue(obj, $".{member.Name}");
+    return SuffixLvalue(obj, int.TryParse(member.Name, out var tupleDtor) ? $".{tupleDtor + 1}" : $".{member.Name}");
   }
 
   protected override ConcreteSyntaxTree EmitArraySelect(List<Action<ConcreteSyntaxTree>> indices, Type elmtType, ConcreteSyntaxTree wr) {
@@ -541,9 +587,11 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
 
   protected override void EmitIndexCollectionSelect(Expression source, Expression index, bool inLetExprBody, ConcreteSyntaxTree wr,
     ConcreteSyntaxTree wStmts) {
+    wr.Write("pfun.fn (");
     EmitExpr(source, inLetExprBody, wr, wStmts );
-    var wrindex = wr.NewBlock("[", "]!", BlockStyle.Nothing, BlockStyle.Nothing);
-    EmitExpr(index, inLetExprBody, wrindex, wStmts);
+    wr.Write(") (");
+    EmitExpr(index, inLetExprBody, wr, wStmts);
+    wr.Write(") (by sorry)");
   }
 
   protected override void EmitIndexCollectionUpdate(Expression source, Expression index, Expression value,
@@ -571,7 +619,7 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
   protected override void EmitApplyExpr(Type functionType, IOrigin tok, Expression function, List<Expression> arguments, bool inLetExprBody,
     ConcreteSyntaxTree wr, ConcreteSyntaxTree wStmts) {
     var sep = " ";
-    if (function is IdentifierExpr { Name: var name } && name.StartsWith("_#Make")) {
+    if (function is IdentifierExpr { Name: var name } && name.StartsWith("_tuple#")) {
       wr = wr.ForkInParens();
       sep = ", ";
     } else {
@@ -726,12 +774,16 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
         opString = "∈";
         break;
       case BinaryExpr.ResolvedOpcode.NotInSet:
+        opString = "∉";
         break;
       case BinaryExpr.ResolvedOpcode.Union:
+        opString = "∪";
         break;
       case BinaryExpr.ResolvedOpcode.Intersection:
+        opString = "∩";
         break;
       case BinaryExpr.ResolvedOpcode.SetDifference:
+        opString = "\\";
         break;
       case BinaryExpr.ResolvedOpcode.MultiSetEq:
         break;

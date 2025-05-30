@@ -1,0 +1,6 @@
+
+includes = ["network.dfy", "Kermit2PC.dfy"]
+
+
+[options]
+type-system-refresh = true
