@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Diagnostics.Contracts;
 using System.Linq;
 using System.Numerics;
@@ -11,6 +12,7 @@ using Type = Microsoft.Dafny.Type;
 namespace DafnyCore.Backends.Lean;
 
 // TODO: mcamaioni@: every time TrExprList is used in this file, surround each argument with parentheses
+// instead of iterate extract each element and put parenthesis around it
 // and every time you output what looks like a function call
 
 public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : SinglePassCodeGenerator(options, reporter) {
@@ -26,7 +28,7 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
     public ConcreteSyntaxTree CreateFunction(string name, List<TypeArgumentInstantiation> typeArgs, List<Formal> formals, Type resultType, IOrigin tok, bool isStatic,
       bool createBody, MemberDecl member, bool forBodyInheritance, bool lookasideBody) {
       functions.WriteLine();
-      functions = functions.Write($"def {dt.Name}.{name}");
+      functions = functions.Write($"noncomputable def {dt.Name}.{name}");
       Contract.Assert(typeArgs.Count == 0);
       var dtType = UserDefinedType.FromTopLevelDecl(tok, dt, new List<Type>());
       parent.DeclareFormal(" ", "this", dtType, tok, true, functions);
@@ -78,6 +80,51 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
 
     public void Finish() { }
   }
+
+  private struct TopLevelFunctionWriter(LeanCodeGenerator parent, TopLevelDecl cls, ConcreteSyntaxTree wr) : IClassWriter {
+    public ConcreteSyntaxTree CreateMethod(MethodOrConstructor m, List<TypeArgumentInstantiation> typeArgs, bool createBody, bool forBodyInheritance,
+      bool lookasideBody) {
+      throw new NotImplementedException();
+    }
+
+    public ConcreteSyntaxTree SynthesizeMethod(Method m, List<TypeArgumentInstantiation> typeArgs, bool createBody, bool forBodyInheritance,
+      bool lookasideBody) {
+      throw new NotImplementedException();
+    }
+
+    public ConcreteSyntaxTree CreateFunction(string name, List<TypeArgumentInstantiation> typeArgs, List<Formal> formals, Type resultType, IOrigin tok, bool isStatic,
+      bool createBody, MemberDecl member, bool forBodyInheritance, bool lookasideBody) {
+      wr = wr.WriteLine($"noncomputable def {cls.Name}.{name} ");
+      parent.WriteFormals(" ", formals, wr.NewBlock(header: "", footer: " :=", open: BlockStyle.Space, close: BlockStyle.Space));
+      return wr;
+    }
+
+    public ConcreteSyntaxTree CreateGetter(string name, TopLevelDecl enclosingDecl, Type resultType, IOrigin tok, bool isStatic,
+      bool isConst, bool createBody, MemberDecl member, bool forBodyInheritance) {
+      throw new NotImplementedException();
+    }
+
+    public ConcreteSyntaxTree CreateGetterSetter(string name, Type resultType, IOrigin tok, bool createBody, MemberDecl member,
+      out ConcreteSyntaxTree setterWriter, bool forBodyInheritance) {
+      throw new NotImplementedException();
+    }
+
+    public void DeclareField(string name, TopLevelDecl enclosingDecl, bool isStatic, bool isConst, Type type, IOrigin tok,
+      string rhs, Field field) {
+      throw new NotImplementedException();
+    }
+
+    public void InitializeField(Field field, Type instantiatedFieldType, TopLevelDeclWithMembers enclosingClass) {
+      throw new NotImplementedException();
+    }
+
+    public ConcreteSyntaxTree ErrorWriter() {
+      return null;
+    }
+
+    public void Finish() {
+    }
+  }
   
   public override void EmitCallToMain(Method mainMethod, string baseName, ConcreteSyntaxTree callToMainTree) {
     throw new NotImplementedException();
@@ -111,7 +158,7 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
   }
 
   protected override IClassWriter CreateClass(string moduleName, bool isExtern, string fullPrintName, List<TypeParameter> typeParameters, TopLevelDecl cls, List<Type> superClasses, IOrigin tok, ConcreteSyntaxTree wr) {
-    return new NullClassWriter(this);
+    return new TopLevelFunctionWriter(this, cls, wr.NewBlock($"namespace {cls.Name}" , $"end {cls.Name}", BlockStyle.Newline, BlockStyle.Nothing));
   }
 
   protected override IClassWriter CreateTrait(string name, bool isExtern, List<TypeParameter> typeParameters, TraitDecl trait, List<Type> superClasses, IOrigin tok, ConcreteSyntaxTree wr) {
@@ -129,7 +176,7 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
       Contract.Assert(dt.Members.Count == 0); // This is to make sure that the inductive datatype has no function members
       wr.WriteLine($"inductive {dt.Name} where");
       foreach (var ctor in dt.Ctors) {
-        wr.Write($"| {ctor.Name}");
+        wr.Write($"| {ctor.Name.ToLower()}");
         WriteFormals(" ", ctor.Formals, wr);
         wr.WriteLine();
       }
@@ -138,9 +185,19 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
 
       foreach (var ctor in dt.Ctors) {
         if (ctor.Formals.Count == 1) {
-          wr.WriteLine($"def {dt.Name}.get{ctor.Name} : {dt.Name} -> {TypeName(ctor.Formals[0].Type, wr, ctor.Origin)} :=");
-          wr.WriteLine($"| .{ctor.Name} this => this");
+          wr.WriteLine($"def {dt.Name}.get{ctor.Name.ToLower()} (m : {dt.Name}) : {TypeName(ctor.Formals[0].Type, wr, ctor.Origin)} :=");
+          wr.WriteLine("match m with");
+          wr.WriteLine($"| .{ctor.Name.ToLower()} this => this");
           wr.WriteLine($"| _ => default");
+        }
+      }
+      
+      foreach (var ctor in dt.Ctors) {
+        if (ctor.Formals.Count == 1) {
+          wr.WriteLine($"def {dt.Name}.is{ctor.Name.ToLower()} (m : {dt.Name}) : Bool :=");
+          wr.WriteLine("match m with");
+          wr.WriteLine($"| .{ctor.Name.ToLower()} _ => true");
+          wr.WriteLine($"| _ => false");
         }
       }
       
@@ -180,10 +237,12 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
         break;
       case LetExpr letExpr: // Destructuring let
         var wrVars = wr.Write("let ");
-        if (letExpr.LHSs.Count > 1) {
-          wrVars = wr.NewBlock(header: "⟨", footer: "⟩", open: BlockStyle.Nothing, close: BlockStyle.Space);
+        Contract.Assert(letExpr.LHSs.Count == 1);
+        var Lhs = letExpr.LHSs.First();
+        if (Lhs.Vars.Count() > 1) {
+          wrVars = wr.NewBlock(header: "(", footer: ")", open: BlockStyle.Nothing, close: BlockStyle.Space);
         }
-        TrExprList(letExpr.LHSs.Select(Expression (pat) => new IdentifierExpr(pat.Origin, new BoundVar(pat.Origin, pat.Id))).ToList(), wrVars, inLetExprBody, wStmts, parens: false);
+        TrExprList(Lhs.Vars.Select(Expression (bv) => new IdentifierExpr(letExpr.Origin, bv)).ToList(), wrVars, inLetExprBody, wStmts, parens: false);
         wr = wr.Write(":= ");
         Contract.Assert(letExpr.RHSs.Count == 1);
         EmitExpr(letExpr.RHSs.First(), inLetExprBody, wr, wStmts);
@@ -191,11 +250,9 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
         EmitExpr(letExpr.Body, inLetExprBody, wr, wStmts);
         break;
       case DatatypeValue datatypeValue:
-        EmitApplyExpr(null, datatypeValue.Origin, new IdentifierExpr(datatypeValue.Origin, new BoundVar(datatypeValue.Origin, $"{datatypeValue.DatatypeName}.{datatypeValue.Ctor.Name}")), datatypeValue.Arguments, inLetExprBody, wr, wStmts);
+        EmitApplyExpr(null, datatypeValue.Origin, new IdentifierExpr(datatypeValue.Origin, new BoundVar(datatypeValue.Origin, $"{datatypeValue.DatatypeName}.{datatypeValue.Ctor.Name.ToLower()}")), datatypeValue.Arguments, inLetExprBody, wr, wStmts);
         break;
       case DatatypeUpdateExpr updateExpr:
-        wr = wr.NewBlock(header: " ", open: BlockStyle.Brace, close: BlockStyle.SpaceBrace);
-
         void Flatten() {
           if (updateExpr.Root is DatatypeUpdateExpr inner) {
             updateExpr.Root = inner.Root;
@@ -205,14 +262,25 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
         }
         
         Flatten();
-        
-        EmitExpr(updateExpr.Root, inLetExprBody, wr, wStmts);
-        wr.Write(" with ");
-        wr.Comma(updateExpr.Updates, update => {
-          EmitIdentifier(update.Item2, wr);
-          wr = wr.Write(" := ");
+
+        var dt = updateExpr.Root.Type.AsIndDatatype;
+        if (dt.Ctors.Count > 1) {
+          Contract.Assert(updateExpr.Updates.Count == 1);
+          var update = updateExpr.Updates.First();
+          wr.Write($"{dt.Name}.{update.Item2.CapitaliseFirstLetter()} ");
+          wr = wr.ForkInParens();
           EmitExpr(update.Item3, inLetExprBody, wr, wStmts);
-        });
+        } else {
+          wr = wr.NewBlock(header: " ", open: BlockStyle.Brace, close: BlockStyle.SpaceBrace);
+          EmitExpr(updateExpr.Root, inLetExprBody, wr, wStmts);
+          wr.Write(" with ");
+          wr.Comma(updateExpr.Updates, update => {
+            EmitIdentifier(update.Item2, wr);
+            wr = wr.Write(" := ");
+            EmitExpr(update.Item3, inLetExprBody, wr, wStmts);
+          });
+        }
+
         break;
       case ITEExpr iteExpr:
         EmitExpr(iteExpr.Test, inLetExprBody, wr.NewBlock(header: "if", footer: " then", open: BlockStyle.Space, close: BlockStyle.Newline), wStmts);
@@ -222,17 +290,16 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
         break;
       case MemberSelectExpr { Obj: { Type: var type } lhs, Member: DatatypeDestructor field }:
         if (type.AsIndDatatype.Ctors.Count > 1) {
-          wr.Write($"{type.AsIndDatatype.Name}.get{field.Name.CapitaliseFirstLetter()} ");
-          EmitExpr(lhs, inLetExprBody, wr, wStmts);
+          wr.Write($"{type.AsIndDatatype.Name}.get{field.EnclosingCtors[0].Name.ToLower()} ");
+          EmitExpr(lhs, inLetExprBody, wr.ForkInParens(), wStmts);
           break;
         } else {
           goto default;
         }
       case MemberSelectExpr { Obj: var lhs, Member: SpecialField { SpecialId: SpecialField.ID.UseIdParam, IdParam: string rhs } }:
         if (rhs.StartsWith("is")) {
-          EmitExpr(lhs, inLetExprBody, wr, wStmts);
-          wr = wr.Write(" = .");
-          EmitIdentifier(rhs[3..], wr);
+          wr.Write($"{TypeName(lhs.Type, wr, lhs.Origin)}.is{rhs[3..].ToLower()} ");
+          EmitExpr(lhs, inLetExprBody, wr.ForkInParens(), wStmts);
           break;
         }
         goto default;
@@ -249,7 +316,7 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
         key ??= new IdentifierExpr(idx.Origin, idx);
         wr.Write("λ ");
         EmitExpr(key, inLetExprBody, wr, wStmts);
-        wr.Write(", ");
+        wr.Write("=> ");
         var wrPredicate = wr.NewBlock(header: "if", footer: " then part.some", open: BlockStyle.Space, close: BlockStyle.Space);
         EmitExpr(predicate, inLetExprBody, wrPredicate, wStmts);
         EmitExpr(value, inLetExprBody, wr, wStmts);
@@ -282,7 +349,7 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
   {
     switch (extendedPattern) {
       case IdPattern idPattern:
-        EmitIdentifier(idPattern.Id, wr);
+        EmitIdentifier(idPattern.Id.ToLower(), wr);
         if (idPattern.Arguments is { } args) {
           wr.Write(" ");
           wr.Comma(" ", args, ep => EmitExtendedPattern(ep, inLetExprBody, wr, wStmts));
@@ -344,7 +411,7 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
       CharType => "Char",
       IntType => "Int",
       MapType { Domain: var domain, Range: var range } =>
-        $"pfun ({TypeName(domain, wr, tok, member)}) ({TypeName(range, wr, tok, member)})",
+        $"PFun ({TypeName(domain, wr, tok, member)}) ({TypeName(range, wr, tok, member)})",
       MultiSetType multiSetType => throw new NotImplementedException(),
       SeqType { Arg: var argType } => $"List ({TypeName(argType, wr, tok, member)})",
       SetType { Arg: var argType } => $"Set ({TypeName(argType, wr, tok, member)})",
@@ -569,7 +636,15 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
 
   protected override ILvalue EmitMemberSelect(Action<ConcreteSyntaxTree> obj, Type objType, MemberDecl member, List<TypeArgumentInstantiation> typeArgs, Dictionary<TypeParameter, Type> typeMap,
     Type expectedType, string additionalCustomParameter = null, bool internalAccess = false) {
-    return SuffixLvalue(obj, int.TryParse(member.Name, out var tupleDtor) ? $".{tupleDtor + 1}" : $".{member.Name}");
+    string suffix;
+    if (member.Name is "Values") {
+      return EnclosedLvalue("PFun.ran (", obj, ")");
+    } else if (int.TryParse(member.Name, out var tupleDtor)) {
+      suffix = $".{tupleDtor + 1}";
+    } else {
+      suffix = $".{member.Name}";
+    }
+    return SuffixLvalue(obj, suffix);
   }
 
   protected override ConcreteSyntaxTree EmitArraySelect(List<Action<ConcreteSyntaxTree>> indices, Type elmtType, ConcreteSyntaxTree wr) {
@@ -587,7 +662,7 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
 
   protected override void EmitIndexCollectionSelect(Expression source, Expression index, bool inLetExprBody, ConcreteSyntaxTree wr,
     ConcreteSyntaxTree wStmts) {
-    wr.Write("pfun.fn (");
+    wr.Write("PFun.fn (");
     EmitExpr(source, inLetExprBody, wr, wStmts );
     wr.Write(") (");
     EmitExpr(index, inLetExprBody, wr, wStmts);
@@ -596,7 +671,11 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
 
   protected override void EmitIndexCollectionUpdate(Expression source, Expression index, Expression value,
     CollectionType resultCollectionType, bool inLetExprBody, ConcreteSyntaxTree wr, ConcreteSyntaxTree wStmts) {
-    TrExprList([source, index, value], wr.Write("update "), inLetExprBody, wStmts, parens: false, sep: " ");
+    wr.Write("Map.update");
+    foreach (var arg in ImmutableArray<Expression>.Empty.Concat([source, index, value])) {
+      wr.Write(" ");
+      EmitExpr(arg, inLetExprBody, wr.ForkInParens(), wStmts);
+    }
   }
 
   protected override void EmitSeqSelectRange(Expression source, Expression lo, Expression hi, bool fromArray, bool inLetExprBody,
@@ -626,7 +705,10 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
       EmitExpr(function, inLetExprBody, wr, wStmts);
       wr.Write(" ");
     }
-    TrExprList(arguments.Select(Expression (arg) => new ParensExpression(arg.Origin, arg)).ToList(), wr, inLetExprBody, wStmts, sep: sep, parens: false);
+    foreach (var arg in arguments) {
+      EmitExpr(arg, inLetExprBody, wr.ForkInParens(), wStmts);
+      wr.Write(sep);
+    }
   }
   
   protected override void CompileFunctionCallExpr(FunctionCallExpr e, ConcreteSyntaxTree wr, bool inLetExprBody,
@@ -635,7 +717,10 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
     wr.Write(" ");
     tr(e.Receiver, wr, inLetExprBody, wStmts);
     wr.Write(" ");
-    TrExprList(e.Args, wr, inLetExprBody, wStmts, sep: " ", parens: false);
+    foreach (var arg in e.Args) {
+      EmitExpr(arg, inLetExprBody, wr.ForkInParens(), wStmts);
+      wr.Write(" ");
+    }
   }
 
   protected override ConcreteSyntaxTree EmitBetaRedex(List<string> boundVars, List<Expression> arguments, List<Type> boundTypes, Type resultType, IOrigin resultTok,
@@ -689,8 +774,12 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
         EmitExpr(expr, inLetExprBody, wr, wStmts);
         break;
       case ResolvedUnaryOp.Cardinality:
-        EmitExpr(expr, inLetExprBody, wr, wStmts);
-        wr.Write(".length"); 
+        wr.Write("Set.ncard ");
+        if (expr.Type is MapType) {
+          wr = wr.ForkInParens();
+          wr.Write("PFun.Dom ");
+        }
+        EmitExpr(expr, inLetExprBody, wr.ForkInParens(), wStmts);
         break;
       default:
         throw new ArgumentOutOfRangeException(nameof(op), op, null);
@@ -832,7 +921,8 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
       case BinaryExpr.ResolvedOpcode.MapNeq:
         break;
       case BinaryExpr.ResolvedOpcode.InMap:
-        opString = "∈";
+        opString = "∈ PFun.Dom (";
+        postOpString = ")";
         break;
       case BinaryExpr.ResolvedOpcode.NotInMap:
         break;
@@ -897,7 +987,7 @@ public class LeanCodeGenerator(DafnyOptions options, ErrorReporter reporter) : S
         break;
       case SeqType seqType:
       case SetType setType:
-        var wrList = wr.NewBlock(header: "[", footer: "]", open: BlockStyle.Nothing, close: BlockStyle.Nothing);
+        var wrList = wr.NewBlock(close: BlockStyle.SpaceBrace);
         TrExprList(elements, wrList, inLetExprBody, wStmts, typeAt: null, parens: false);
         break;
       default:
