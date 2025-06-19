@@ -42,13 +42,13 @@ type tTime = nat
 
 datatype tClockTime = New(earliest: tTime, latest: tTime)
 
-datatype tClockTimeReq = New(requester: MachineID, requestId: nat)
+datatype tClockTimeReq = New(requester: MachineID, requestId: tTid)
 
-datatype tClockTimeRsp = New(requestId: nat, now: tClockTime)
+datatype tClockTimeRsp = New(requestId: tTid, now: tClockTime)
 
-datatype tClockAlarmReq = New(requester: MachineID, requestId: nat, wait_time: tTime)
+datatype tClockAlarmReq = New(requester: MachineID, requestId: tTid, wait_time: tTime)
 
-datatype tClockAlarmRsp = New(requestId: nat)
+datatype tClockAlarmRsp = New(requestId: tTid)
 
 datatype tDisconnectRouter = New(sender: MachineID)
 
@@ -64,7 +64,7 @@ type tKey = nat
 
 type tVal = nat
 
-datatype tStartReq = New(client: MachineID)
+datatype tStartReq = New(client: MachineID, tid: tTid)
 
 datatype tStartRsp = New(router: MachineID, tid: tTid, start_time: tTime)
 
@@ -122,13 +122,13 @@ newtype RouterID = nat
 
 datatype RouterState = Init(entry: bool) | EventLoop(entry: bool) | Disconnected(entry: bool) | Error(entry: bool)
 
-datatype Router = New(routerId: nat, localClock: MachineID, shards: map<nat, MachineID>, client: map<tTid, MachineID>, start_time: map<tTid, tTime>, participants: map<tTid, set<MachineID>>, lead_participant: map<tTid, MachineID>, committed: set<tTid>, prepare_responses: map<tTid, set<tShardPrepareRsp>>, prepare_commit_decision: map<tTid, bool>, prepare_commit_time: map<tTid, tTime>, state: RouterState)
+datatype Router = New(localClock: MachineID, shards: map<nat, MachineID>, client: map<tTid, MachineID>, start_time: map<tTid, tTime>, participants: map<tTid, set<MachineID>>, lead_participant: map<tTid, MachineID>, committed: set<tTid>, prepare_responses: map<tTid, set<tShardPrepareRsp>>, prepare_commit_decision: map<tTid, bool>, prepare_commit_time: map<tTid, tTime>, state: RouterState)
 
 newtype ShardID = nat
 
 datatype ShardState = Init(entry: bool) | EventLoop(entry: bool) | Error(entry: bool)
 
-datatype Shard = New(shardId: nat, localClock: MachineID, clock: tTime, versions: map<tKey, map<tTime, tVal>>, write_buff: map<tTid, map<tKey, tVal>>, router: map<tTid, MachineID>, lead_shard: map<tTid, MachineID>, prepared: map<tTid, tTime>, committed: map<tTid, tTime>, aborted: set<tTid>, pending_reads: map<tShardReadReq, set<tTid>>, pending_updates: set<tShardUpdateReq>, locked_keys: set<tKey>, state: ShardState)
+datatype Shard = New(localClock: MachineID, clock: tTime, versions: map<tKey, map<tTime, tVal>>, write_buff: map<tTid, map<tKey, tVal>>, router: map<tTid, MachineID>, lead_shard: map<tTid, MachineID>, prepared: map<tTid, tTime>, committed: map<tTid, tTime>, aborted: set<tTid>, pending_reads: map<tShardReadReq, set<tTid>>, pending_updates: set<tShardUpdateReq>, locked_keys: set<tKey>, state: ShardState)
 
 datatype System = New(machines: map<MachineID, Machine>, network: Network) {
   function deliver_eClockTick_to_Clock_in_EventLoop(src: MachineID, dst: MachineID): System
@@ -203,20 +203,17 @@ datatype System = New(machines: map<MachineID, Machine>, network: Network) {
       this.(network :=
       network');
 
-    var tid: tTid :=
-      this_2.machines[dst].router.routerId * 1000 + |this_2.machines[dst].router.client|;
-
     var this_1 :=
       this_2.(machines :=
       this_2.machines[dst :=
       this_2.machines[dst].(router :=
       this_2.machines[dst].router.(client :=
-      this_2.machines[dst].router.client[tid :=
+      this_2.machines[dst].router.client[payload.tid :=
       payload.client]))]);
 
     var this_0 :=
       this_1.(network :=
-      this_1.network.send(dst, Event.eClockTimeReq(tClockTimeReq.New(dst, tid)), this_1.machines[dst].router.localClock));
+      this_1.network.send(dst, Event.eClockTimeReq(tClockTimeReq.New(dst, payload.tid)), this_1.machines[dst].router.localClock));
 
     this_0
   }
